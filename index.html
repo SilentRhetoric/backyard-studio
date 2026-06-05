@@ -1,0 +1,345 @@
+<!-- Backyard Studio: craftsman transitional, 12'x20', single south-facing shed roof, 3-in-12 pitch -->
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0b0d10; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  #app { position:relative; width:100vw; height:100vh; }
+  canvas { display:block; position:absolute; inset:0; }
+  .card {
+    position:absolute; background:rgba(20,24,28,0.55); backdrop-filter:blur(12px);
+    -webkit-backdrop-filter:blur(12px); border:1px solid rgba(255,255,255,0.12);
+    border-radius:14px; color:#f4f5f3; box-shadow:0 8px 30px rgba(0,0,0,0.35);
+  }
+  #title { top:16px; left:16px; padding:13px 16px; max-width:270px; }
+  #title h1 { font-size:15px; font-weight:600; letter-spacing:.2px; }
+  #title p { font-size:11.5px; opacity:.7; margin-top:3px; line-height:1.4; }
+  #hint { bottom:16px; left:50%; transform:translateX(-50%); padding:7px 14px;
+    font-size:11.5px; opacity:.8; white-space:nowrap; }
+  #panel { top:16px; right:16px; padding:14px 16px; width:210px; }
+  #panel .row { margin-bottom:14px; }
+  #panel .row:last-child { margin-bottom:0; }
+  #panel label { font-size:11px; text-transform:uppercase; letter-spacing:.8px; opacity:.65; display:block; margin-bottom:7px; }
+  #panel .val { float:right; opacity:.9; text-transform:none; letter-spacing:0; font-weight:600; }
+  input[type=range]{ -webkit-appearance:none; width:100%; height:4px; border-radius:4px;
+    background:rgba(255,255,255,0.2); outline:none; }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:16px; height:16px;
+    border-radius:50%; background:#ffd27a; cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+  input[type=range]::-moz-range-thumb{ width:16px; height:16px; border:none; border-radius:50%;
+    background:#ffd27a; cursor:pointer; }
+  .toggle { display:flex; align-items:center; justify-content:space-between; cursor:pointer; }
+  .toggle span { font-size:12.5px; font-weight:500; }
+  .sw { width:42px; height:23px; border-radius:23px; background:rgba(255,255,255,0.22);
+    position:relative; transition:background .2s; flex:none; }
+  .sw.on { background:#5aa9e6; }
+  .sw::after { content:""; position:absolute; top:2px; left:2px; width:19px; height:19px;
+    border-radius:50%; background:#fff; transition:transform .2s; box-shadow:0 1px 3px rgba(0,0,0,.4); }
+  .sw.on::after { transform:translateX(19px); }
+</style>
+
+<div id="app">
+  <div id="title" class="card">
+    <h1>Backyard Studio</h1>
+    <p>Craftsman transitional · 12&prime;&times;20&prime; · single south-facing shed roof, 3-in-12 pitch</p>
+  </div>
+  <div id="panel" class="card">
+    <div class="row">
+      <label>Time of day <span class="val" id="todVal">Afternoon</span></label>
+      <input type="range" id="tod" min="0" max="100" value="58">
+    </div>
+    <div class="row">
+      <div class="toggle" id="solarToggle">
+        <span>Solar panels</span>
+        <div class="sw on" id="solarSw"></div>
+      </div>
+    </div>
+  </div>
+  <div id="hint" class="card">Drag to orbit · Scroll or pinch to zoom</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const R = Math.PI/180;
+const W=20, D=12, PITCH=Math.atan(3/12), TAN=Math.tan(PITCH), COS=Math.cos(PITCH);
+const overS=0.4, overN=0.4, gableOver=0.4, wallT=0.5;   // minimal eaves
+const Hs = 7;                          // south (low) wall height at wall line
+const Hn = Hs + D*TAN;                 // north (high) wall height
+const zS = D/2, zN = -D/2;
+const eaveS_z = D/2 + overS, eaveS_y = Hs - overS*TAN;   // low (south) eave: horiz pos & height
+const eaveN_z = -(D/2 + overN), eaveN_y = Hn + overN*TAN;// high (north) eave: horiz pos & height
+const roofLenX = W + 2*gableOver;      // roof length incl. gable overhangs
+const slopeLen = (D + overS + overN)/COS;                // slope length, eave to eave
+const roof_z = (eaveS_z + eaveN_z)/2, roof_y = (eaveS_y + eaveN_y)/2;
+const ySurf = z => eaveS_y + (eaveS_z - z)*TAN;          // roof surface height at horiz z
+
+// ---------- renderer / scene / camera ----------
+const app = document.getElementById('app');
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(app.clientWidth, app.clientHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, app.clientWidth/app.clientHeight, 0.5, 500);
+
+// ---------- sky ----------
+function skyTex(){
+  const c=document.createElement('canvas'); c.width=8; c.height=256;
+  const x=c.getContext('2d'); const g=x.createLinearGradient(0,0,0,256);
+  g.addColorStop(0,'#5b91c8'); g.addColorStop(0.45,'#9cc2e3'); g.addColorStop(0.8,'#d6e6f2'); g.addColorStop(1,'#eaf1f3');
+  x.fillStyle=g; x.fillRect(0,0,8,256);
+  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+}
+scene.background = skyTex();
+
+// ---------- textures ----------
+function mkc(s){ const c=document.createElement('canvas'); c.width=c.height=s; return c; }
+function rnd(a,b){ return a+Math.random()*(b-a); }
+
+function sidingBase(){
+  const c=mkc(256), x=c.getContext('2d');
+  x.fillStyle='#f2f0ea'; x.fillRect(0,0,256,256);
+  const laps=8, h=256/laps;
+  for(let i=0;i<laps;i++){
+    const y=i*h, g=x.createLinearGradient(0,y,0,y+h);
+    g.addColorStop(0,'#fbfaf6'); g.addColorStop(0.85,'#eceae3'); g.addColorStop(1,'#d8d6cf');
+    x.fillStyle=g; x.fillRect(0,y,256,h);
+    x.fillStyle='rgba(120,118,110,0.45)'; x.fillRect(0,y+h-2,256,2);
+    x.fillStyle='rgba(255,255,255,0.5)'; x.fillRect(0,y,256,1);
+  }
+  for(let i=0;i<900;i++){ x.fillStyle='rgba(0,0,0,'+rnd(0.01,0.04)+')'; x.fillRect(rnd(0,256),rnd(0,256),rnd(8,40),1); }
+  return c;
+}
+const _siding = sidingBase();
+function sidingMat(rx,ry){
+  const t=new THREE.CanvasTexture(_siding); t.wrapS=t.wrapT=THREE.RepeatWrapping;
+  t.repeat.set(rx,ry); t.encoding=THREE.sRGBEncoding; t.anisotropy=4;
+  return new THREE.MeshStandardMaterial({map:t, roughness:0.92, color:0xffffff, side:THREE.DoubleSide});
+}
+
+function roofTex(){
+  const c=mkc(256), x=c.getContext('2d');
+  x.fillStyle='#3a3d40'; x.fillRect(0,0,256,256);
+  const rows=10, h=256/rows;
+  for(let r=0;r<rows;r++){
+    const y=r*h, sh=(r%2)*8;
+    for(let tx=-sh;tx<256;tx+=24){ const sv=rnd(-12,12);
+      x.fillStyle='rgb('+(52+sv)+','+(55+sv)+','+(58+sv)+')'; x.fillRect(tx,y,22,h-1); }
+    x.fillStyle='rgba(0,0,0,0.35)'; x.fillRect(0,y+h-2,256,2);
+  }
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(8,8); t.encoding=THREE.sRGBEncoding;
+  return new THREE.MeshStandardMaterial({map:t, roughness:0.95});
+}
+function grassTex(){
+  const c=mkc(256), x=c.getContext('2d');
+  x.fillStyle='#5e7d3a'; x.fillRect(0,0,256,256);
+  for(let i=0;i<6000;i++){ const v=rnd(-30,30);
+    x.fillStyle='rgb('+(94+v)+','+(125+v)+','+(58+v*0.4)+')'; x.fillRect(rnd(0,256),rnd(0,256),rnd(1,3),rnd(2,5)); }
+  const t=new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(40,40); t.encoding=THREE.sRGBEncoding;
+  return t;
+}
+function panelTex(){
+  const c=mkc(256), x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,256,256);
+  g.addColorStop(0,'#0f1a36'); g.addColorStop(0.5,'#16244a'); g.addColorStop(1,'#0c142b');
+  x.fillStyle=g; x.fillRect(0,0,256,256);
+  x.strokeStyle='rgba(120,150,200,0.35)'; x.lineWidth=2; const n=6,s=256/n;
+  for(let i=0;i<=n;i++){ x.beginPath(); x.moveTo(i*s,0); x.lineTo(i*s,256); x.stroke();
+    x.beginPath(); x.moveTo(0,i*s); x.lineTo(256,i*s); x.stroke(); }
+  for(let i=0;i<n;i++)for(let j=0;j<n;j++){ x.fillStyle='rgba(255,255,255,0.04)'; x.fillRect(i*s+3,j*s+3,s-6,s-6); }
+  const t=new THREE.CanvasTexture(c); t.encoding=THREE.sRGBEncoding; return t;
+}
+
+// ---------- materials ----------
+const trimMat  = new THREE.MeshStandardMaterial({color:0xfbfbf7, roughness:0.6});
+const glassMat = new THREE.MeshStandardMaterial({color:0x7d96a8, roughness:0.06, metalness:0.2, transparent:true, opacity:0.55});
+const darkMat  = new THREE.MeshStandardMaterial({color:0x1c1f22, roughness:1.0});
+const frameMat = new THREE.MeshStandardMaterial({color:0xb9bec6, roughness:0.45, metalness:0.55});
+const panelMat = new THREE.MeshStandardMaterial({map:panelTex(), roughness:0.22, metalness:0.25});
+const handleMat= new THREE.MeshStandardMaterial({color:0x2a2c2e, roughness:0.4, metalness:0.7});
+
+function box(w,h,d,mat,x,y,z,p){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+  m.position.set(x,y,z); m.castShadow=true; m.receiveShadow=true; (p||scene).add(m); return m;
+}
+const building = new THREE.Group(); scene.add(building);
+
+// interior shell (dark, so glazing reads solid) — kept low so it stays under the shed roof
+box(W-0.8, 6.8, D-0.8, darkMat, 0, 3.4, 0, building);
+
+// ---------- north + side walls ----------
+// north wall: solid below, clerestory window ribbon across the top
+const clerB = 7.7, clerT = 9.4;                                                          // clerestory band (Hn = 10)
+box(W, clerB, wallT, sidingMat(W/4, clerB/0.6/8), 0, clerB/2, zN, building);                 // solid lower wall
+box(W, Hn-clerT, wallT, sidingMat(W/4, (Hn-clerT)/0.6/8), 0, (clerT+Hn)/2, zN, building);    // header strip above
+(function(){
+  const cy=(clerB+clerT)/2, ch=clerT-clerB, gw=W-1.0;
+  box(gw, ch+0.2, 0.1, darkMat, 0, cy, zN+0.12, building);       // dark backing so glazing reads
+  box(gw, ch, 0.05, glassMat, 0, cy, zN-0.07, building);         // glass ribbon on the north face
+  box(gw+0.2, 0.28, 0.18, trimMat, 0, clerB, zN-0.05, building); // sill
+  box(gw+0.2, 0.28, 0.18, trimMat, 0, clerT, zN-0.05, building); // head
+  for(let i=0;i<=7;i++) box(0.12, ch, 0.16, trimMat, -gw/2 + i*gw/7, cy, zN-0.11, building);  // mullions / jambs
+})();
+for(const sx of [-1,1]){                                                 // east/west trapezoids
+  const sh=new THREE.Shape();
+  sh.moveTo(-D/2,0); sh.lineTo(D/2,0); sh.lineTo(D/2,Hs); sh.lineTo(-D/2,Hn); sh.closePath();
+  const g=new THREE.ShapeGeometry(sh);
+  const m=new THREE.Mesh(g, sidingMat(1/4, 1/(0.6*8)));   // ShapeGeometry UVs are in feet -> match box siding (4' tiles, 0.6' laps)
+  m.rotation.y=-Math.PI/2; m.position.set(sx*W/2,0,0); m.castShadow=true; m.receiveShadow=true; building.add(m);
+}
+
+// ---------- south wall: french doors (center) + two 3'x5' windows ----------
+const uW=2.85, openTop=6.5, glzB=0;                            // french-door leaf; 6.5' doors, floor-to-head
+const winW=3, winH=5, winHead=openTop, winSill=openTop-winH;   // 3'x5' windows, heads aligned w/ doors (sill 1.5')
+const winCx=6, winL=winCx-winW/2, winR=winCx+winW/2;           // window x-extent (right side; left mirrors)
+function southSeg(x0,x1,y0,y1){
+  const w=x1-x0,h=y1-y0; if(w<=0.001||h<=0.001) return;
+  box(w,h,wallT, sidingMat(Math.max(w/4,0.4), Math.max(h/0.6/8,0.5)), (x0+x1)/2,(y0+y1)/2, zS, building);
+}
+// siding tiles the whole wall except the door + two window openings (dark interior shell shows through)
+southSeg(-10, -winR, 0, Hs);          // left corner
+southSeg(-winR, -winL, 0, winSill);   // under left window
+southSeg(-winR, -winL, winHead, Hs);  // over left window
+southSeg(-winL, -3, 0, Hs);           // left window -> door
+southSeg(-3, 3, openTop, Hs);         // header over doors
+southSeg(3, winL, 0, Hs);             // door -> right window
+southSeg(winL, winR, 0, winSill);     // under right window
+southSeg(winL, winR, winHead, Hs);    // over right window
+southSeg(winR, 10, 0, Hs);            // right corner
+
+// french doors (two leaves), backed by the dark interior shell
+function glazedUnit(cx, isDoor){
+  const gy=(glzB+openTop)/2, gh=openTop-glzB;
+  box(uW, gh, 0.12, trimMat, cx, gy, zS, building);                       // white frame leaf
+  box(uW-0.35, gh-0.2, 0.05, glassMat, cx, gy, zS+0.07, building);        // glass
+  for(const vx of [-1,1]) box(0.07, gh-0.2, 0.06, trimMat, cx+vx*(uW-0.35)/6, gy, zS+0.11, building);  // 2 vert muntins -> 3 cols
+  for(let k=1;k<5;k++) box(uW-0.35, 0.07, 0.06, trimMat, cx, glzB+k*gh/5, zS+0.11, building);          // 4 horiz muntins -> 5 rows
+  if(isDoor){ const hx = cx<0 ? cx+uW/2-0.25 : cx-uW/2+0.25;
+    box(0.1,0.5,0.12, handleMat, hx, gy-0.3, zS+0.14, building); }
+}
+glazedUnit(-1.5,true); glazedUnit(1.5,true);
+// door trim: center mullion, jambs, threshold, head casing
+box(0.22, openTop, 0.18, trimMat, 0, openTop/2, zS+0.04, building);
+for(const jx of [-3,3]) box(0.3, openTop+0.1, 0.2, trimMat, jx, openTop/2, zS+0.04, building);
+box(6.6, 0.5, 0.22, trimMat, 0, 0.25, zS+0.05, building);                     // threshold
+box(6.6, 0.4, 0.22, trimMat, 0, openTop+0.18, zS+0.06, building);            // head casing
+
+// two 3'x5' windows (glass backed by the dark interior shell)
+function window35(cx){
+  const cy=(winSill+winHead)/2;
+  box(winW, winH, 0.05, glassMat, cx, cy, zS+0.07, building);                 // glass
+  for(const vx of [-1,1]) box(0.08, winH, 0.06, trimMat, cx+vx*winW/6, cy, zS+0.11, building);          // 2 vert muntins -> 3 cols
+  for(let k=1;k<4;k++) box(winW, 0.08, 0.06, trimMat, cx, winSill+k*winH/4, zS+0.11, building);          // 3 horiz muntins -> 4 rows
+  box(winW+0.6, 0.22, 0.2, trimMat, cx, winHead+0.11, zS+0.05, building);     // head casing
+  box(winW+0.6, 0.28, 0.22, trimMat, cx, winSill-0.08, zS+0.06, building);    // sill
+  for(const s of [-1,1]) box(0.22, winH+0.3, 0.18, trimMat, cx+s*(winW/2+0.11), cy, zS+0.04, building); // jambs
+}
+window35(-winCx); window35(winCx);
+
+// corner boards (all four verticals)
+box(0.5,Hs,0.5, trimMat,  W/2, Hs/2, zS, building);
+box(0.5,Hs,0.5, trimMat, -W/2, Hs/2, zS, building);
+box(0.5,Hn,0.5, trimMat,  W/2, Hn/2, zN, building);
+box(0.5,Hn,0.5, trimMat, -W/2, Hn/2, zN, building);
+
+// ---------- roof (single south-facing shed plane) ----------
+const roof = box(roofLenX, 0.4, slopeLen, roofTex(), 0, roof_y, roof_z, building);
+roof.rotation.x = PITCH;
+
+// fascia + boxed soffit at both eaves (no exposed rafter tails)
+function eave(ez,ey,dir){
+  box(roofLenX, 0.7, 0.25, trimMat, 0, ey-0.18, ez, building);                         // fascia
+  const over=Math.abs(ez-dir*D/2), cz=(dir*D/2+ez)/2;
+  const so=box(roofLenX, 0.08, over/COS+0.2, trimMat, 0, ySurf(cz)-0.3, cz, building);  // soffit
+  so.rotation.x=PITCH;
+}
+eave(eaveS_z, eaveS_y, 1); eave(eaveN_z, eaveN_y, -1);
+// rake boards (east/west sloped edges)
+for(const sx of [-1,1]){ const rb=box(0.25,0.5,slopeLen, trimMat, sx*(W/2+gableOver), roof_y, roof_z, building); rb.rotation.x=PITCH; }
+// (knee braces removed: eaves are now minimal, nothing to bracket)
+
+// ---------- solar array (fills the south roof) ----------
+const solar = new THREE.Group(); building.add(solar);
+const cols=[-8,-4,0,4,8], rows=[-4.4,-2.2,0,2.2,4.4], pw=3.6, pl=1.9, off=0.2;
+for(const cx of cols) for(const zh of rows){
+  const ys=ySurf(zh)+off*COS, pz=zh+off*Math.sin(PITCH);
+  const fr=new THREE.Mesh(new THREE.BoxGeometry(pw+0.12,0.12,pl+0.12), frameMat);
+  fr.position.set(cx,ys-0.03,pz); fr.rotation.x=PITCH; fr.castShadow=true; fr.receiveShadow=true; solar.add(fr);
+  const pn=new THREE.Mesh(new THREE.BoxGeometry(pw,0.1,pl), panelMat);
+  pn.position.set(cx,ys+0.04,pz); pn.rotation.x=PITCH; pn.castShadow=true; pn.receiveShadow=true; solar.add(pn);
+}
+
+// ---------- ground + landscaping ----------
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(160,160),
+  new THREE.MeshStandardMaterial({map:grassTex(), roughness:1.0}));
+ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+const stepMat=new THREE.MeshStandardMaterial({color:0x9a948a, roughness:0.95});
+for(let i=0;i<5;i++){ const s=new THREE.Mesh(new THREE.CylinderGeometry(0.85,0.85,0.12,12), stepMat);
+  s.position.set(rnd(-0.4,0.4),0.06, zS+2.4+i*2.0); s.scale.z=1.2; s.castShadow=true; s.receiveShadow=true; scene.add(s); }
+
+function tree(x,z,sc){
+  const g=new THREE.Group();
+  const tr=new THREE.Mesh(new THREE.CylinderGeometry(0.3*sc,0.42*sc,3.5*sc,8),
+    new THREE.MeshStandardMaterial({color:0x6b4a2f, roughness:0.95}));
+  tr.position.y=1.75*sc; tr.castShadow=true; g.add(tr);
+  const fol=new THREE.MeshStandardMaterial({color:0x4f7a32, roughness:0.95});
+  for(const o of [[0,4,0,2.2],[1.1,3.4,0.5,1.5],[-1,3.6,-0.6,1.6],[0.4,5,0.3,1.7],[-0.6,4.6,0.8,1.4]]){
+    const b=new THREE.Mesh(new THREE.SphereGeometry(o[3]*sc,12,12),fol); b.position.set(o[0]*sc,o[1]*sc,o[2]*sc); b.castShadow=true; g.add(b); }
+  g.position.set(x,0,z); scene.add(g);
+}
+tree(-17,7,1.25); tree(16,-8,1.0); tree(-15,-12,0.85);
+function shrub(x,z){ const s=new THREE.Mesh(new THREE.SphereGeometry(1,10,10),
+  new THREE.MeshStandardMaterial({color:0x5a7d39,roughness:1})); s.position.set(x,0.7,z); s.scale.y=0.8; s.castShadow=true; scene.add(s); }
+shrub(-9.5,8); shrub(9.5,8.4); shrub(11,7);
+
+// ---------- lights ----------
+const hemi=new THREE.HemisphereLight(0xbcd6ff,0x6b6353,0.55); scene.add(hemi);
+scene.add(new THREE.AmbientLight(0xffffff,0.12));
+const sun=new THREE.DirectionalLight(0xfff2dc,2.4);
+sun.castShadow=true; sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.left=-32; sun.shadow.camera.right=32; sun.shadow.camera.top=38; sun.shadow.camera.bottom=-32;
+sun.shadow.camera.near=1; sun.shadow.camera.far=240; sun.shadow.bias=-0.0004;
+scene.add(sun); scene.add(sun.target); sun.target.position.set(0,6,0);
+function setSun(t){
+  const elev=(Math.sin(t*Math.PI)*58+6)*R, az=(-58+116*t)*R, hor=Math.cos(elev);
+  sun.position.set(hor*Math.sin(az)*80, Math.sin(elev)*80, hor*Math.cos(az)*80);
+  const warm=1-Math.sin(t*Math.PI);
+  sun.color.setRGB(1,0.95-0.18*warm,0.86-0.34*warm);
+  sun.intensity=1.4+1.3*Math.sin(t*Math.PI);
+  hemi.intensity=0.35+0.35*Math.sin(t*Math.PI);
+  document.getElementById('todVal').textContent =
+    t<0.18?'Sunrise':t<0.42?'Morning':t<0.6?'Midday':t<0.82?'Afternoon':'Golden hour';
+}
+setSun(0.58);
+
+// ---------- orbit controls ----------
+const target=new THREE.Vector3(0,6,0); let radius=44, theta=0.5, phi=1.0;
+function place(){ camera.position.set(
+  target.x+radius*Math.sin(phi)*Math.sin(theta),
+  target.y+radius*Math.cos(phi),
+  target.z+radius*Math.sin(phi)*Math.cos(theta)); camera.lookAt(target); }
+place();
+let drag=false,px=0,py=0,pinch=0; const el=renderer.domElement;
+el.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;el.setPointerCapture(e.pointerId);});
+el.addEventListener('pointerup',()=>drag=false);
+el.addEventListener('pointermove',e=>{ if(!drag)return; const dx=e.clientX-px,dy=e.clientY-py; px=e.clientX; py=e.clientY;
+  theta-=dx*0.005; phi=Math.max(0.12,Math.min(1.45,phi-dy*0.005)); place(); });
+el.addEventListener('wheel',e=>{e.preventDefault(); radius=Math.max(14,Math.min(95,radius*(1+e.deltaY*0.0012))); place();},{passive:false});
+el.addEventListener('touchmove',e=>{ if(e.touches.length===2){ const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+  if(pinch){ radius=Math.max(14,Math.min(95,radius*(1+(pinch-d)*0.004))); place(); } pinch=d; e.preventDefault(); } },{passive:false});
+el.addEventListener('touchend',()=>pinch=0);
+
+// ---------- UI ----------
+document.getElementById('tod').addEventListener('input',e=>setSun(e.target.value/100));
+const sw=document.getElementById('solarSw');
+document.getElementById('solarToggle').addEventListener('click',()=>{ solar.visible=!solar.visible; sw.classList.toggle('on',solar.visible); });
+
+// ---------- loop ----------
+window.addEventListener('resize',()=>{ const w=app.clientWidth,h=app.clientHeight;
+  camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); });
+(function loop(){ requestAnimationFrame(loop); renderer.render(scene,camera); })();
+</script>
